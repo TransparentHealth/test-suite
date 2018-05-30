@@ -16,7 +16,7 @@ import requests
 from functools import reduce
 
 
-CONTENT_LENGTH_LIMIT = 1024 * 5000  # 5MB
+CONTENT_LENGTH_LIMIT = 1024 * 7500  # 7.5MB
 ERROR_CONTENT_LENGTH = 'Content length "{}" exceeds expected content length limit of {}.'
 
 
@@ -26,6 +26,15 @@ def bad_response_assert(response, message, **kwargs):
 
     return template.render(response=response,
                            message=message.format(**kwargs))
+
+
+def bad_response_assert_with_resource(response, message, resource, **kwargs):
+    with open('features/steps/response.jinja2') as handle:
+        template = jinja2.Template(handle.read())
+
+    return template.render(response=response,
+                           message=message.format(**kwargs),
+                           bad_resource=resource)
 
 
 def bad_redirect_assert(message, sent, received):

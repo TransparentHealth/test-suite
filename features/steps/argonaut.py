@@ -1,12 +1,15 @@
 # pylint: disable=missing-docstring,function-redefined
 
 import json
+import re
 
 from behave import then
 
 from features.steps import utils
 
 from testsuite import systems
+
+from features.steps.deciders import StepDecider, ArgonautObservationDecider
 
 ERROR_CODING_MISSING = '''
 {field_name} is missing field "coding".
@@ -28,6 +31,8 @@ ERROR_MISSING_FIELD = ('The resources identified by ids ({resource_ids}) were ab
 
 ERROR_WRONG_FIXED = 'None of {values} match {value}.'
 
+ERROR_NO_VALID_ENTRIES = 'No resources have {field_name} set to {value}.'
+
 
 def get_resources(resource, filter_type):
     if 'entry' in resource:
@@ -46,6 +51,10 @@ def in_value_set(coding, value_set_url):
 
 @then(u'there exists one or more {name} in {field_name}')
 def step_impl(context, name, field_name):
+
+    if not StepDecider(context).should_run_test():
+        return
+
     path = field_name.split('.')
     filter_type = path.pop(0)
     resources = get_resources(context.response.json(), filter_type)
@@ -59,6 +68,10 @@ def step_impl(context, name, field_name):
 
 @then(u'each {field_name} must have a {sub_field}')
 def step_impl(context, field_name, sub_field):
+
+    if not StepDecider(context).should_run_test():
+        return
+
     path = field_name.split('.')
     filter_type = path.pop(0)
     sub_path = sub_field.split('.')
@@ -70,13 +83,18 @@ def step_impl(context, field_name, sub_field):
         for item in found:
             match = utils.traverse(item, sub_path)
             assert match is not None, \
-                utils.bad_response_assert(context.response,
-                                          ERROR_REQUIRED,
-                                          name=sub_type)
+                utils.bad_response_assert_with_resource(response=context.response,
+                                                        message=ERROR_REQUIRED,
+                                                        resource=res,
+                                                        name=sub_type)
 
 
 @then(u'there exists one reference to a {resource_type} in {field_name}')
 def step_impl(context, resource_type, field_name):
+
+    if not StepDecider(context).should_run_test():
+        return
+
     path = field_name.split('.')
     filter_type = path.pop(0)
     resources = get_resources(context.response.json(), filter_type)
@@ -84,9 +102,18 @@ def step_impl(context, resource_type, field_name):
     for res in resources:
         try:
             reference = utils.traverse(res, path).get('reference')
+
+            # Validate the reference for FHIR compliance formatting.
+            # http://hl7.org/fhir/references.html
+            reference_regex = r'((http|https)://([A-Za-z0-9\\\.\:\%\$]\/)*)?(' + \
+                resource_type + r')\/[A-Za-z0-9\-\.]{1,64}(\/_history\/[A-Za-z0-9\-\.]{1,64})?'
+            compiled_regex = re.compile(reference_regex)
+            regex_search_results = compiled_regex.search(reference)
+
         except AttributeError:
             reference = ''
-        assert reference.startswith(resource_type), \
+
+        assert regex_search_results, \
             utils.bad_response_assert(context.response,
                                       ERROR_REFERENCE_MATCH,
                                       reference=reference,
@@ -96,13 +123,17 @@ def step_impl(context, resource_type, field_name):
 @then(u'one of the following paths exist: {field_string} in {resource}')
 def step_impl(context, field_string, resource):
 
+    if not StepDecider(context).should_run_test():
+        return
+
     fields_to_find = field_string.split(",")
 
     resources = get_resources(context.response.json(), resource)
 
     valid_resource_ids = set([
         res.get("id") for res in resources
-        if utils.has_one_of(res, fields_to_find)])
+        if not ArgonautObservationDecider(res).should_validate() or
+        utils.has_one_of(res, fields_to_find)])
 
     all_resource_ids = set([res.get("id") for res in resources])
 
@@ -117,6 +148,10 @@ def step_impl(context, field_string, resource):
 
 @then(u'there exists one {name} in {field_one_name} or {field_two_name}')
 def step_impl(context, name, field_one_name, field_two_name):
+
+    if not StepDecider(context).should_run_test():
+        return
+
     path_one = field_one_name.split('.')
     path_two = field_two_name.split('.')
 
@@ -130,26 +165,37 @@ def step_impl(context, name, field_one_name, field_two_name):
         found_two = utils.traverse(res, path_two)
 
         assert (found_one is not None) or (found_two is not None), \
-            utils.bad_response_assert(context.response,
-                                      ERROR_REQUIRED,
-                                      name=name)
+            utils.bad_response_assert_with_resource(response=context.response,
+                                                    message=ERROR_REQUIRED,
+                                                    resource=res,
+                                                    name=name
+                                                    )
 
 
 @then(u'there exists one {name} in {field_name}')
 def step_impl(context, name, field_name):
+
+    if not StepDecider(context).should_run_test():
+        return
+
     path = field_name.split('.')
     filter_type = path.pop(0)
     resources = get_resources(context.response.json(), filter_type)
 
     for res in resources:
         found = utils.traverse(res, path)
-        assert found is not None, utils.bad_response_assert(context.response,
-                                                            ERROR_REQUIRED,
-                                                            name=name)
+        assert found is not None, utils.bad_response_assert_with_resource(response=context.response,
+                                                                          message=ERROR_REQUIRED,
+                                                                          name=name,
+                                                                          resource=res)
 
 
 @then(u'{field_name} is bound to {value_set_url_one} or {value_set_url_two}')
 def step_impl(context, field_name, value_set_url_one, value_set_url_two):
+
+    if not StepDecider(context).should_run_test():
+        return
+
     path = field_name.split('.')
     filter_type = path.pop(0)
     resources = get_resources(context.response.json(), filter_type)
@@ -161,19 +207,21 @@ def step_impl(context, field_name, value_set_url_one, value_set_url_two):
             found = [found]
         elif isinstance(found, dict):
             assert 'coding' in found, \
-                utils.bad_response_assert(context.response,
-                                          ERROR_CODING_MISSING,
-                                          field_name=field_name,
-                                          json=json.dumps(found, indent=2))
+                utils.bad_response_assert_with_resource(response=context.response,
+                                                        message=ERROR_CODING_MISSING,
+                                                        resource=res,
+                                                        field_name=field_name,
+                                                        json=json.dumps(found, indent=2))
             found = [coding.get('code') for coding in found.get('coding')
                      if in_value_set(coding, value_set_url_one) or
                      in_value_set(coding, value_set_url_two)]
 
         assert found, \
-            utils.bad_response_assert(context.response,
-                                      ERROR_MISSING_SYSTEM_CODING,
-                                      field_name=field_name,
-                                      system=system_names)
+            utils.bad_response_assert_with_resource(response=context.response,
+                                                    message=ERROR_MISSING_SYSTEM_CODING,
+                                                    resource=res,
+                                                    field_name=field_name,
+                                                    system=system_names)
 
         for code in found:
             try:
@@ -182,64 +230,117 @@ def step_impl(context, field_name, value_set_url_one, value_set_url_two):
             except systems.SystemNotRecognized:
                 valid = False
 
-            assert valid, utils.bad_response_assert(context.response,
-                                                    ERROR_INVALID_BINDING,
-                                                    code=code,
-                                                    system=system_names,
-                                                    json=json.dumps(res, indent=2))
+            assert valid, utils.bad_response_assert_with_resource(response=context.response,
+                                                                  message=ERROR_INVALID_BINDING,
+                                                                  resource=res,
+                                                                  code=code,
+                                                                  system=system_names,
+                                                                  json=json.dumps(res, indent=2))
 
 
 @then(u'{field_name} is bound to {value_set_url}')
 def step_impl(context, field_name, value_set_url):
+    if not StepDecider(context).should_run_test():
+        return
+
     path = field_name.split('.')
     filter_type = path.pop(0)
     resources = get_resources(context.response.json(), filter_type)
 
     for res in resources:
-        found = utils.traverse(res, path)
-        if isinstance(found, str):
-            found = [found]
-        elif isinstance(found, dict):
-            assert 'coding' in found, \
-                utils.bad_response_assert(context.response,
-                                          ERROR_CODING_MISSING,
-                                          field_name=field_name,
-                                          json=json.dumps(found, indent=2))
-            found = [coding.get('code') for coding in found.get('coding')
-                     if in_value_set(coding, value_set_url)]
+        if ArgonautObservationDecider(res).should_validate():
+            found = utils.traverse(res, path)
+            if isinstance(found, str):
+                found = [found]
+            elif isinstance(found, dict):
+                assert 'coding' in found, \
+                    utils.bad_response_assert_with_resource(response=context.response,
+                                                            message=ERROR_CODING_MISSING,
+                                                            resource=res,
+                                                            field_name=field_name,
+                                                            json=json.dumps(found, indent=2))
+                found = [coding.get('code') for coding in found.get('coding')
+                         if in_value_set(coding, value_set_url)]
 
-        assert found, \
-            utils.bad_response_assert(context.response,
-                                      ERROR_MISSING_SYSTEM_CODING,
-                                      field_name=field_name,
-                                      system=value_set_url)
+            assert found, \
+                utils.bad_response_assert_with_resource(response=context.response,
+                                                        message=ERROR_MISSING_SYSTEM_CODING,
+                                                        resource=res,
+                                                        field_name=field_name,
+                                                        system=value_set_url)
 
-        for code in found:
-            try:
-                valid = systems.validate_code(code, value_set_url)
-            except systems.SystemNotRecognized:
-                valid = False
+            for code in found:
+                try:
+                    valid = systems.validate_code(code, value_set_url)
+                except systems.SystemNotRecognized:
+                    valid = False
 
-            assert valid, utils.bad_response_assert(context.response,
-                                                    ERROR_INVALID_BINDING,
-                                                    code=code,
-                                                    system=value_set_url,
-                                                    json=json.dumps(res, indent=2))
+                assert valid, utils.bad_response_assert_with_resource(
+                    response=context.response,
+                    message=ERROR_INVALID_BINDING,
+                    resource=res,
+                    code=code,
+                    system=value_set_url,
+                    json=json.dumps(res, indent=2))
 
 
-@then(u'there exists a fixed {field_name}={value}')
+@then(u'there is at least one entry with a fixed {field_name}={value}')
 def step_impl(context, field_name, value):
     path = field_name.split('.')
     filter_type = path.pop(0)
     resources = get_resources(context.response.json(), filter_type)
 
+    found_one = found_at_least_one(resources, path, value)
+
+    assert found_one, utils.bad_response_assert(
+        response=context.response,
+        message=ERROR_NO_VALID_ENTRIES,
+        field_name=field_name,
+        value=value)
+
+
+def found_at_least_one(resources, path, value):
+    """
+    Return a boolean indicating if we found a resource with
+    the specified path declared, having the specified value.
+    :param resources: A list of dictionaries.
+    :param path: A list representing the steps in the path, top element is NOT the resource type.
+    :param value: The value you want the last element in the path to have.
+    :return: Boolean
+    """
     for res in resources:
-        found = utils.traverse(res, path)
-        assert found, utils.bad_response_assert(context.response,
-                                                ERROR_FIELD_NOT_PRESENT,
-                                                field=field_name,
-                                                json=json.dumps(res, indent=2))
-        assert value in found, utils.bad_response_assert(context.response,
-                                                         ERROR_WRONG_FIXED,
-                                                         values=found,
-                                                         value=value)
+        found_path = utils.traverse(res, path)
+
+        if found_path and value in found_path:
+            return True
+
+    return False
+
+
+@then(u'there exists a fixed {field_name}={value}')
+def step_impl(context, field_name, value):
+
+    if not StepDecider(context).should_run_test():
+        return
+
+    path = field_name.split('.')
+    filter_type = path.pop(0)
+    resources = get_resources(context.response.json(), filter_type)
+
+    for res in resources:
+        if ArgonautObservationDecider(res).should_validate():
+            found = utils.traverse(res, path)
+
+            assert found, utils.bad_response_assert_with_resource(
+                response=context.response,
+                message=ERROR_FIELD_NOT_PRESENT,
+                resource=res,
+                field=field_name,
+                json=json.dumps(res, indent=2))
+
+            assert value in found, utils.bad_response_assert_with_resource(
+                response=context.response,
+                message=ERROR_WRONG_FIXED,
+                resource=res,
+                values=found,
+                value=value)
